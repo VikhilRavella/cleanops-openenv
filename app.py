@@ -115,12 +115,11 @@ def get_tasks():
 
 
 # ─── /reset ──────────────────────────────────────────────────────────────────
-
 @app.post("/reset", response_model=Observation, tags=["Environment"])
 def reset_episode(request: Optional[ResetRequest] = None):
     try:
-        # If the whole request is None or task_id is None, use "task_1"
-        target_task = "task_1"
+        # Change the default from task_1 to task_001
+        target_task = "task_001" 
         if request and request.task_id:
             target_task = request.task_id
             
