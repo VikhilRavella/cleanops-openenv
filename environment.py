@@ -1,21 +1,8 @@
-"""
-server/environment.py — CleanOps OpenEnv core environment.
-
-This is the ONLY place that mutates the active episode DataFrame.
-
-Flow:
-    reset(task_id) → loads messy dataset, returns Observation
-    step(action)   → validates action, applies cleaning, returns Observation + reward
-    state()        → returns full State snapshot
-
-Reward is computed here (step-level partial progress).
-Grading (final score) is separate — see graders.py.
-"""
-
 from __future__ import annotations
+
 import sys
 import os
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from typing import Any, Dict, List, Optional, Tuple
 import pandas as pd
@@ -29,13 +16,7 @@ from metrics import compute_metrics, data_quality_score
 import cleaning_rules as cr
 
 
-# ─── Environment ─────────────────────────────────────────────────────────────
-
 class CleanOpsEnvironment:
-    """
-    Single-episode stateful environment.
-    One instance per active session/episode.
-    """
 
     def __init__(self) -> None:
         self._task: Optional[TaskDefinition] = None
@@ -48,10 +29,7 @@ class CleanOpsEnvironment:
         self._last_reward: float = 0.0
         self._score_before_step: float = 0.0
 
-    # ── reset ─────────────────────────────────────────────────────────────────
-
     def reset(self, task_id: str) -> Observation:
-        """Start a new episode for the given task."""
         self._task        = get_task(task_id)
         self._original_df = self._task.get_messy_df()
         self._current_df  = self._task.get_messy_df()
@@ -61,50 +39,39 @@ class CleanOpsEnvironment:
         self._is_done     = False
         self._last_reward = 0.0
         self._score_before_step = data_quality_score(self._current_df)
-
         return self._build_observation(
-            reward=0.0,
-            done=False,
+            reward=0.0, done=False,
             message=f"Episode started. Task: {self._task.task_name}. "
                     f"Difficulty: {self._task.difficulty.upper()}. "
                     f"Max steps: {self._task.max_steps}.",
         )
 
-    # ── step ──────────────────────────────────────────────────────────────────
-
     def step(self, action: Action) -> Tuple[Observation, float, bool, Dict[str, Any]]:
-        """
-        Apply a structured cleaning action to the current DataFrame.
-        Returns (observation, reward, done, info).
-        """
         if not self._task:
-            raise RuntimeError("Call reset() before step().")
+            # Auto-reset to task_001 if called before reset
+            self.reset("task_001")
+
         if self._is_done:
             return self._build_observation(0.0, True, "Episode already finished."), 0.0, True, {}
 
         self._step_count += 1
         info: Dict[str, Any] = {}
 
-        score_before = data_quality_score(self._current_df)
-
-        # ── dispatch action ──
         try:
             reward, message = self._dispatch(action)
         except Exception as exc:
             reward  = -0.05
             message = f"Action failed: {exc}"
 
-        # ── record in history ──
         self._action_history.append({
-            "step":        self._step_count,
-            "action_type": action.action_type,
+            "step":          self._step_count,
+            "action_type":   action.action_type,
             "target_column": action.target_column,
-            "parameters": action.parameters,
-            "message":    message,
-            "reward":     reward,
+            "parameters":    action.parameters,
+            "message":       message,
+            "reward":        reward,
         })
 
-        # ── check termination ──
         done = (
             action.action_type == ActionType.finalize_cleaning
             or self._step_count >= self._task.max_steps
@@ -112,14 +79,12 @@ class CleanOpsEnvironment:
         if done:
             self._is_done = True
             if self._step_count >= self._task.max_steps and action.action_type != ActionType.finalize_cleaning:
-                reward -= 0.10  # penalty for running out of steps without finalizing
+                reward -= 0.10
                 message += " [Max steps reached — episode auto-terminated.]"
 
         self._last_reward = reward
         obs = self._build_observation(reward=reward, done=done, message=message)
         return obs, reward, done, info
-
-    # ── state ─────────────────────────────────────────────────────────────────
 
     def state(self) -> State:
         if not self._task:
@@ -138,92 +103,74 @@ class CleanOpsEnvironment:
             current_score_estimate=data_quality_score(self._current_df),
         )
 
-    # ── action dispatcher ─────────────────────────────────────────────────────
-
     def _dispatch(self, action: Action) -> Tuple[float, str]:
-        """Route action to its handler. Returns (reward, message)."""
-        df = self._current_df
-        at = action.action_type
-        col = action.target_column
+        df     = self._current_df
+        at     = action.action_type
+        col    = action.target_column
         params = action.parameters
+
+        # ── Safety guard: column existence check ──
+        mutation_actions = {
+            ActionType.standardize_format, ActionType.normalize_dates,
+            ActionType.validate_values, ActionType.replace_invalid,
+            ActionType.fill_missing,
+        }
+        if at in mutation_actions:
+            if not col:
+                return -0.05, f"Action '{at}' requires a target_column."
+            if col not in df.columns:
+                return -0.05, (
+                    f"Column '{col}' not found. "
+                    f"Available columns: {list(df.columns)}"
+                )
 
         if at == ActionType.inspect_column:
             return self._act_inspect(df, col)
-
         if at == ActionType.standardize_format:
             return self._act_standardize(df, col, params)
-
         if at == ActionType.normalize_dates:
             return self._act_normalize_dates(df, col, params)
-
         if at == ActionType.validate_values:
             return self._act_validate(df, col, params)
-
         if at == ActionType.replace_invalid:
             return self._act_replace_invalid(df, col, params)
-
         if at == ActionType.fill_missing:
             return self._act_fill_missing(df, col, params)
-
         if at == ActionType.remove_duplicates:
             return self._act_remove_duplicates(df, params)
-
         if at == ActionType.merge_duplicates:
             return self._act_merge_duplicates(df, params)
-
         if at == ActionType.apply_business_rule:
             return self._act_business_rule(df, params)
-
         if at == ActionType.finalize_cleaning:
             return self._act_finalize(df)
 
         return -0.05, f"Unknown action type: {at}"
 
-    # ── action handlers ───────────────────────────────────────────────────────
-
     def _act_inspect(self, df: pd.DataFrame, col: Optional[str]) -> Tuple[float, str]:
-        """Inspect — no mutation, small positive reward (encourages informed acting)."""
         if col and col not in df.columns:
-            return -0.02, f"Column '{col}' not found."
+            return -0.02, f"Column '{col}' not found. Available: {list(df.columns)}"
         return 0.01, f"Inspected {'column: ' + col if col else 'full table'}."
 
-    def _act_standardize(
-        self, df: pd.DataFrame, col: Optional[str], params: Dict
-    ) -> Tuple[float, str]:
-        """Apply text standardization to a column."""
-        if not col or col not in df.columns:
-            return -0.05, f"Invalid target column '{col}'."
-
-        mode = params.get("format", "strip")
+    def _act_standardize(self, df: pd.DataFrame, col: str, params: Dict) -> Tuple[float, str]:
+        mode   = params.get("format", "strip")
         before = df[col].copy()
         df[col] = cr.normalize_series_text(df[col], mode=mode)
         changed = int((df[col] != before).sum())
-
         if changed == 0:
-            return -0.02, f"No changes made to '{col}' (already clean or wrong format)."
+            return -0.02, f"No changes in '{col}' (already clean)."
         return self._reward_for_changes(changed, df, f"Standardized {changed} values in '{col}' to {mode}.")
 
-    def _act_normalize_dates(
-        self, df: pd.DataFrame, col: Optional[str], params: Dict
-    ) -> Tuple[float, str]:
-        if not col or col not in df.columns:
-            return -0.05, f"Invalid target column '{col}'."
-
+    def _act_normalize_dates(self, df: pd.DataFrame, col: str, params: Dict) -> Tuple[float, str]:
         out_fmt = params.get("output_format", "%Y-%m-%d")
-        before = df[col].copy()
+        before  = df[col].copy()
         df[col] = df[col].apply(lambda v: cr.normalize_date(str(v), out_fmt) if pd.notna(v) else v)
         changed = int((df[col] != before).sum())
-
         if changed == 0:
             return -0.01, f"No date changes in '{col}'."
         return self._reward_for_changes(changed, df, f"Normalized {changed} dates in '{col}'.")
 
-    def _act_validate(
-        self, df: pd.DataFrame, col: Optional[str], params: Dict
-    ) -> Tuple[float, str]:
-        """Inspect-style: validate and report, no mutation. Small reward."""
-        if not col or col not in df.columns:
-            return -0.02, f"Column '{col}' not found for validation."
+    def _act_validate(self, df: pd.DataFrame, col: str, params: Dict) -> Tuple[float, str]:
         validator = params.get("validator", "")
         if validator == "email":
             count = cr.count_invalid_emails(df[col])
@@ -236,13 +183,7 @@ class CleanOpsEnvironment:
             return 0.02, f"Validated '{col}': {count} invalid date(s) found."
         return 0.01, f"Validated column '{col}'."
 
-    def _act_replace_invalid(
-        self, df: pd.DataFrame, col: Optional[str], params: Dict
-    ) -> Tuple[float, str]:
-        """Replace invalid values (e.g. invalid emails) with a replacement string or None."""
-        if not col or col not in df.columns:
-            return -0.05, f"Invalid target column '{col}'."
-
+    def _act_replace_invalid(self, df: pd.DataFrame, col: str, params: Dict) -> Tuple[float, str]:
         replacement = params.get("replacement", None)
         validator   = params.get("validator", "")
         before_null = df[col].isna().sum()
@@ -257,71 +198,50 @@ class CleanOpsEnvironment:
             return -0.02, "No validator specified for replace_invalid."
 
         after_null = df[col].isna().sum()
-        changed = int(abs(after_null - before_null))
+        changed    = int(abs(after_null - before_null))
         if replacement is not None:
-            changed_mask = (df[col] == replacement).sum()
-            changed = max(changed, int(changed_mask))
-
+            changed = max(changed, int((df[col] == replacement).sum()))
         if changed == 0:
             return -0.02, f"No invalid values found in '{col}'."
         return self._reward_for_changes(changed, df, f"Replaced {changed} invalid '{validator}' values in '{col}'.")
 
-    def _act_fill_missing(
-        self, df: pd.DataFrame, col: Optional[str], params: Dict
-    ) -> Tuple[float, str]:
-        if not col or col not in df.columns:
-            return -0.05, f"Invalid target column '{col}'."
-
+    def _act_fill_missing(self, df: pd.DataFrame, col: str, params: Dict) -> Tuple[float, str]:
         before_nulls = int(df[col].isna().sum())
         if before_nulls == 0:
             return -0.02, f"No missing values in '{col}'."
-
         strategy = params.get("strategy", "value")
         fill_val  = params.get("value", "UNKNOWN")
-        df[col] = cr.fill_missing_values(df[col], strategy=strategy, value=fill_val)
-        after_nulls = int(df[col].isna().sum())
-        filled = before_nulls - after_nulls
-
+        df[col]  = cr.fill_missing_values(df[col], strategy=strategy, value=fill_val)
+        filled   = before_nulls - int(df[col].isna().sum())
         return self._reward_for_changes(filled, df, f"Filled {filled} missing values in '{col}'.")
 
-    def _act_remove_duplicates(
-        self, df: pd.DataFrame, params: Dict
-    ) -> Tuple[float, str]:
+    def _act_remove_duplicates(self, df: pd.DataFrame, params: Dict) -> Tuple[float, str]:
         before = len(df)
         subset = params.get("subset", None)
         keep   = params.get("keep", "first")
         self._current_df = cr.remove_duplicate_rows(df, subset=subset, keep=keep)
         removed = before - len(self._current_df)
-
         if removed == 0:
             return -0.02, "No duplicate rows found."
         return 0.10 + 0.02 * min(removed, 5), f"Removed {removed} duplicate row(s)."
 
-    def _act_merge_duplicates(
-        self, df: pd.DataFrame, params: Dict
-    ) -> Tuple[float, str]:
-        """Deduplicate by a key column, keeping first occurrence."""
+    def _act_merge_duplicates(self, df: pd.DataFrame, params: Dict) -> Tuple[float, str]:
         key_col = params.get("key_column", None)
         if not key_col or key_col not in df.columns:
-            return -0.05, f"Invalid key_column '{key_col}' for merge_duplicates."
-
+            return -0.05, f"Invalid key_column '{key_col}'. Available: {list(df.columns)}"
         before = len(df)
         self._current_df = df.drop_duplicates(subset=[key_col], keep="first").reset_index(drop=True)
         removed = before - len(self._current_df)
-
         if removed == 0:
             return -0.02, f"No duplicates found on key '{key_col}'."
         return 0.10 + 0.02 * min(removed, 5), f"Merged {removed} duplicate(s) on '{key_col}'."
 
-    def _act_business_rule(
-        self, df: pd.DataFrame, params: Dict
-    ) -> Tuple[float, str]:
-        """Apply a named business rule to the DataFrame."""
+    def _act_business_rule(self, df: pd.DataFrame, params: Dict) -> Tuple[float, str]:
         rule = params.get("rule_name", "")
 
         if rule == "fix_negative_quantities":
             if "quantity" not in df.columns:
-                return -0.05, "Column 'quantity' not found."
+                return -0.02, "Column 'quantity' not found — skipping."
             neg = int((pd.to_numeric(df["quantity"], errors="coerce") < 0).sum())
             if neg == 0:
                 return -0.02, "No negative quantities found."
@@ -331,7 +251,7 @@ class CleanOpsEnvironment:
 
         if rule == "fix_negative_prices":
             if "unit_price" not in df.columns:
-                return -0.05, "Column 'unit_price' not found."
+                return -0.02, "Column 'unit_price' not found — skipping."
             neg = int((pd.to_numeric(df["unit_price"], errors="coerce") < 0).sum())
             if neg == 0:
                 return -0.02, "No negative prices found."
@@ -341,7 +261,7 @@ class CleanOpsEnvironment:
 
         if rule == "normalize_currency":
             if "currency" not in df.columns:
-                return -0.05, "Column 'currency' not found."
+                return -0.02, "Column 'currency' not found — skipping."
             before = df["currency"].copy()
             df["currency"] = df["currency"].apply(
                 lambda v: cr.normalize_category(str(v), "currency") if pd.notna(v) else v
@@ -352,18 +272,18 @@ class CleanOpsEnvironment:
 
         if rule == "fix_missing_employee_ids":
             if "employee_id" not in df.columns:
-                return -0.05, "Column 'employee_id' not found."
+                return -0.02, "Column 'employee_id' not found — skipping."
             null_mask = df["employee_id"].isna()
             if null_mask.sum() == 0:
                 return -0.02, "No missing employee IDs."
             df.loc[null_mask, "employee_id"] = "MISSING"
             self._current_df = df
-            return 0.08, f"Flagged {null_mask.sum()} missing employee ID(s) as 'MISSING'."
+            return 0.08, f"Flagged {int(null_mask.sum())} missing employee ID(s) as 'MISSING'."
 
         if rule == "fix_total_comp":
             required = {"salary", "bonus_pct", "total_comp"}
             if not required.issubset(df.columns):
-                return -0.05, f"Columns required: {required}"
+                return -0.02, f"Columns required: {required} — skipping."
             wrong = 0
             for idx, row in df.iterrows():
                 try:
@@ -379,7 +299,7 @@ class CleanOpsEnvironment:
 
         if rule == "fix_state_country":
             if "state" not in df.columns or "country" not in df.columns:
-                return -0.05, "Columns 'state' and 'country' required."
+                return -0.02, "Columns 'state'/'country' not found — skipping."
             fixed = 0
             for idx, row in df.iterrows():
                 state   = str(row["state"]).strip().upper()   if pd.notna(row["state"])   else ""
@@ -391,63 +311,37 @@ class CleanOpsEnvironment:
             self._current_df = df
             return (0.10 if fixed > 0 else -0.02), f"Fixed {fixed} state/country mismatch(es)."
 
-        return -0.05, f"Unknown business rule '{rule}'."
+        # Unknown rule — soft fail, no crash
+        return -0.02, f"Unknown business rule '{rule}' — skipping."
 
     def _act_finalize(self, df: pd.DataFrame) -> Tuple[float, str]:
-        """Agent declares cleaning complete. Bonus if quality improved."""
-        score_now    = data_quality_score(df)
-        score_start  = data_quality_score(self._original_df)
-        improvement  = score_now - score_start
-
+        score_now   = data_quality_score(df)
+        score_start = data_quality_score(self._original_df)
+        improvement = score_now - score_start
         if improvement >= 0.20:
-            bonus   = 0.20
-            quality = "significant"
+            bonus, quality = 0.20, "significant"
         elif improvement >= 0.10:
-            bonus   = 0.10
-            quality = "moderate"
+            bonus, quality = 0.10, "moderate"
         elif improvement > 0.0:
-            bonus   = 0.05
-            quality = "minor"
+            bonus, quality = 0.05, "minor"
         else:
-            bonus   = -0.10
-            quality = "no"
-
+            bonus, quality = -0.10, "no"
         return bonus, (
             f"Cleaning finalized with {quality} improvement "
             f"(quality score: {score_start:.3f} → {score_now:.3f})."
         )
 
-    # ── reward helper ─────────────────────────────────────────────────────────
-
-    def _reward_for_changes(
-        self, num_changes: int, df: pd.DataFrame, message: str
-    ) -> Tuple[float, str]:
-        """
-        Reward for a mutation action:
-          +0.05 base for making any change
-          +0.02 per changed cell (capped at 10)
-          Quality delta bonus/penalty
-        """
-        score_after  = data_quality_score(df)
-        score_before = self._score_before_step
-        delta        = score_after - score_before
+    def _reward_for_changes(self, num_changes: int, df: pd.DataFrame, message: str) -> Tuple[float, str]:
+        score_after   = data_quality_score(df)
+        delta         = score_after - self._score_before_step
         self._score_before_step = score_after
-
-        base    = 0.05
-        per_fix = 0.02 * min(num_changes, 10)
-        quality_bonus = delta * 0.5   # can be negative if agent damages data
-
-        reward = round(base + per_fix + quality_bonus, 4)
+        reward = round(0.05 + 0.02 * min(num_changes, 10) + delta * 0.5, 4)
         return reward, message
 
-    # ── observation builder ───────────────────────────────────────────────────
-
-    def _build_observation(
-        self, reward: float, done: bool, message: str
-    ) -> Observation:
-        df     = self._current_df
-        m      = compute_metrics(df)
-        schema = [
+    def _build_observation(self, reward: float, done: bool, message: str) -> Observation:
+        df = self._current_df
+        m  = compute_metrics(df)
+        columns = [
             ColumnInfo(
                 name=col,
                 dtype=str(df[col].dtype),
@@ -468,14 +362,13 @@ class CleanOpsEnvironment:
             quality_score=m["quality_score"],
         )
         preview = df.head(5).where(pd.notnull(df), None).to_dict("records")
-
         return Observation(
             task_id=self._task.task_id,
             task_name=self._task.task_name,
             task_description=self._task.description,
             difficulty=self._task.difficulty,
             table_preview=preview,
-            schema=schema,
+            columns=columns,          # ← renamed from schema (fixes UserWarning)
             quality_report=qr,
             allowed_actions=[a.value for a in ActionType],
             step_count=self._step_count,
@@ -484,8 +377,6 @@ class CleanOpsEnvironment:
             reward=reward,
             done=done,
         )
-
-    # ── public helpers ────────────────────────────────────────────────────────
 
     @property
     def current_df(self) -> Optional[pd.DataFrame]:
