@@ -111,16 +111,13 @@ def get_tasks():
 
 @app.post("/reset", response_model=Observation, tags=["Environment"])
 def reset_episode(request: ResetRequest):
-    """
-    Start a new episode for a given task.
-    Loads the messy dataset and returns the initial observation.
-    """
+    """Start a new episode for a given task."""
     try:
+        # We use request.task_id. If it's missing, Pydantic uses the default "task_1"
         obs = _env.reset(request.task_id)
         return obs
-    except ValueError as e:
+    except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
-
 
 # ─── /step ───────────────────────────────────────────────────────────────────
 
