@@ -45,7 +45,7 @@ class Observation(BaseModel):
     task_description: str
     difficulty: str
     table_preview: List[Dict[str, Any]]
-    schema: List[ColumnInfo]
+    columns: List[ColumnInfo]          # ← changed from schema
     quality_report: QualityReport
     allowed_actions: List[str]
     step_count: int
