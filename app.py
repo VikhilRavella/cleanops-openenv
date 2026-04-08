@@ -11,7 +11,11 @@ Endpoints:
     POST /baseline
 """
 
-from __future__ import annotations
+from __future__ import annotations  # <--- MUST BE LINE 1
+import os
+from typing import Dict, List, Optional
+from fastapi import FastAPI, HTTPException
+# ... the rest of your imports ...
 import sys
 import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
