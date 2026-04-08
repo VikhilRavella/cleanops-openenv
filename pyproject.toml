@@ -24,3 +24,5 @@ server = "app:app"
 
 [tool.setuptools]
 packages = ["."]
+[project.scripts]
+server = "server.app:main"
