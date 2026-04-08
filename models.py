@@ -9,6 +9,11 @@ import os
 from typing import Dict, List, Optional
 from fastapi import FastAPI, HTTPException
 # ... the rest of your imports ...
+from __future__ import annotations  # <--- MUST BE LINE 1
+from typing import Any, Dict, List, Optional
+from enum import Enum
+from pydantic import BaseModel, Field
+# ... the rest of your code ...
 from __future__ import annotations
 from typing import Any, Dict, List, Optional  # <--- Make sure Optional is here!
 from enum import Enum
