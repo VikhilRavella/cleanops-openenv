@@ -8,7 +8,10 @@ from __future__ import annotations
 from typing import Any, Dict, List, Optional
 from enum import Enum
 from pydantic import BaseModel, Field
-
+from __future__ import annotations
+from typing import Any, Dict, List, Optional  # <--- Make sure Optional is here!
+from enum import Enum
+from pydantic import BaseModel, Field
 
 # ─── Action types ────────────────────────────────────────────────────────────
 
