@@ -1,0 +1,52 @@
+name: cleanops-openenv
+version: "1.0.0"
+description: >
+  A multi-task AI agent environment for solving real-world data cleaning,
+  normalization, validation, and quality repair problems across messy
+  business datasets.
+
+environment:
+  type: tabular-data-cleaning
+  framework: openenv
+  language: python
+  python_version: "3.11"
+
+tasks:
+  - id: task_001
+    name: Customer Contact Cleanup
+    difficulty: easy
+    max_steps: 15
+  - id: task_002
+    name: Sales Transaction Repair
+    difficulty: medium
+    max_steps: 20
+  - id: task_003
+    name: Enterprise Ops Multi-Rule Cleanup
+    difficulty: hard
+    max_steps: 25
+
+api:
+  base_url: "http://localhost:7860"
+  endpoints:
+    health:   GET  /health
+    tasks:    GET  /tasks
+    reset:    POST /reset
+    step:     POST /step
+    state:    GET  /state
+    grader:   POST /grader
+    baseline: POST /baseline
+
+grader:
+  type: deterministic
+  score_range: [0.0, 1.0]
+  partial_credit: true
+
+baseline:
+  type: heuristic
+  requires_api_key: false
+  reproducible: true
+
+deployment:
+  docker: true
+  huggingface_spaces: true
+  port: 7860
