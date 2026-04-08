@@ -111,9 +111,11 @@ class State(BaseModel):
 
 
 # ─── API request / response models ───────────────────────────────────────────
-
 class ResetRequest(BaseModel):
-    task_id: str = Field(..., description="Task ID to start: 'task_001', 'task_002', 'task_003'")
+    task_id: str = Field("task_1", description="Task ID to start")
+
+    class Config:
+        extra = "allow"  # This allows the checker to send extra fields without failing
 
 
 class StepRequest(BaseModel):
