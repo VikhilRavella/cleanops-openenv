@@ -121,11 +121,7 @@ class State(BaseModel):
 
 # ─── API request / response models ───────────────────────────────────────────
 class ResetRequest(BaseModel):
-    # Adding Optional and None makes the body NOT required
-    task_id: Optional[str] = Field(None, description="Task ID to start")
-
-    class Config:
-        extra = "allow"
+    task_id: Optional[str] = Field("task_001", description="Task ID to start")
 
 class StepRequest(BaseModel):
     action: Action
