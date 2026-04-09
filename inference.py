@@ -4,7 +4,6 @@ import os
 import sys
 import traceback
 from typing import List, Optional
-from openai import OpenAI
 
 # ── Environment Setup ───────────────────────────────────────────────────────
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -14,11 +13,10 @@ from tasks import TASK_REGISTRY
 from environment import CleanOpsEnvironment
 from graders import grade
 
-# This is the critical fix: Import get_agent at the top level
+# Import get_agent safely
 try:
     from agent import get_agent
 except ImportError:
-    # Fallback in case of circular dependency during init
     def get_agent(*args, **kwargs):
         import agent
         return agent.get_agent(*args, **kwargs)
@@ -28,14 +26,29 @@ API_BASE_URL = os.environ.get("API_BASE_URL", "https://router.huggingface.co/v1"
 API_KEY = os.environ.get("API_KEY") or os.environ.get("HF_TOKEN")
 MODEL_NAME = os.environ.get("MODEL_NAME", "Qwen/Qwen2.5-72B-Instruct")
 
-client = OpenAI(
-    base_url=API_BASE_URL,
-    api_key=API_KEY if API_KEY else "dummy_key"
-)
+# ── Global Client (Delayed Initialization) ──────────────────────────────────
+_client = None
+
+def _get_client():
+    """Initializes the OpenAI client only when needed to prevent startup crashes."""
+    global _client
+    if _client is None:
+        try:
+            from openai import OpenAI
+            # We use a dummy key if API_KEY is missing to prevent the library from crashing
+            _client = OpenAI(
+                base_url=API_BASE_URL,
+                api_key=API_KEY if API_KEY else "no_key_found"
+            )
+        except Exception as e:
+            print(f"# Client initialization failed: {e}", file=sys.stderr)
+            return None
+    return _client
 
 def _llm_select_action(obs: Observation) -> Optional[Action]:
     """Call LLM via proxy to choose an action."""
-    if not API_KEY:
+    client = _get_client()
+    if not client or not API_KEY:
         return None
 
     system_prompt = "You are a data cleaning agent. Output ONLY valid JSON."
@@ -67,7 +80,6 @@ def _llm_select_action(obs: Observation) -> Optional[Action]:
 
 def run_episode(task_id: str):
     env = CleanOpsEnvironment()
-    # Now get_agent is defined and reachable here
     heuristic = get_agent(task_id, prefer_llm=False)
 
     print(f"[START] task={task_id} env=cleanops model={MODEL_NAME}", flush=True)
@@ -103,8 +115,9 @@ def run_episode(task_id: str):
         )
 
     except Exception as e:
+        # Ensure we always print an [END] tag even if the loop crashes
         print(f"[END] success=false steps=0 score=0.00 rewards=", flush=True)
-        print(f"# Error: {e}", file=sys.stderr)
+        print(f"# Error during episode: {e}", file=sys.stderr)
 
 def main():
     for task_id in sorted(TASK_REGISTRY.keys()):
