@@ -25,22 +25,13 @@ USAGE:
   python inference.py
 """
 
-from __future__ import annotations
-
-import json
-import os
-import sys
-import traceback
-from typing import Any, Dict, List, Optional
-
 # ── Environment imports ──────────────────────────────────────────────────────
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-
 from models import Action, ActionType, Observation
 from tasks import TASK_REGISTRY
 from agent import get_agent
 from graders import grade
-from environment import CleanOpsEnvironment
+from environment import CleanOpsEnvironment  # <--- FIXED: Removed 'server.'
 
 # ── Config (from env vars) ───────────────────────────────────────────────────
 API_BASE_URL: str = os.getenv("API_BASE_URL", "https://api-inference.huggingface.co/v1")
