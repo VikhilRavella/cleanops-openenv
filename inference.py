@@ -24,15 +24,21 @@ USAGE:
   # Heuristic fallback (no API key needed):
   python inference.py
 """
+from __future__ import annotations
+import json
+import os
+import sys  # <--- MAKE SURE THIS IS HERE
+import traceback
+from typing import Any, Dict, List, Optional
 
-# ── Environment imports ──────────────────────────────────────────────────────
+# Now this line will work perfectly
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
 from models import Action, ActionType, Observation
 from tasks import TASK_REGISTRY
 from agent import get_agent
 from graders import grade
-from environment import CleanOpsEnvironment  # <--- FIXED: Removed 'server.'
-
+from environment import CleanOpsEnvironment # <--- Also make sure 'server.' is removed here!
 # ── Config (from env vars) ───────────────────────────────────────────────────
 API_BASE_URL: str = os.getenv("API_BASE_URL", "https://api-inference.huggingface.co/v1")
 MODEL_NAME: str   = os.getenv("MODEL_NAME", "Qwen/Qwen2.5-72B-Instruct")
