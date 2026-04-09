@@ -4,7 +4,7 @@ import os
 import sys
 import traceback
 from typing import Any, Dict, List, Optional
-from openai import OpenAI  # Import at top
+from openai import OpenAI
 
 # ── Environment Setup ───────────────────────────────────────────────────────
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -15,18 +15,17 @@ from environment import CleanOpsEnvironment
 from graders import grade
 from agent import get_agent
 
-# ── Config (Strictly following the Validator's "How to Fix" section) ────────
-# They explicitly told us to use os.environ["API_BASE_URL"] and os.environ["API_KEY"]
-API_BASE_URL = os.environ.get("API_BASE_URL", "https://api-inference.huggingface.co/v1")
-API_KEY = os.environ.get("API_KEY", os.environ.get("HF_TOKEN", ""))
+# ── Config (Strictly as per Validator Log) ──────────────────────────────────
+API_BASE_URL = os.environ.get("API_BASE_URL")
+API_KEY = os.environ.get("API_KEY")
 MODEL_NAME = os.environ.get("MODEL_NAME", "Qwen/Qwen2.5-72B-Instruct")
 
 def _llm_select_action(obs: Observation) -> Optional[Action]:
-    """Uses the mandatory OpenAI Client for LLM calls via the Proxy."""
-    # Initialize inside to ensure environment variables are loaded by the OS
-    if not API_KEY:
+    """Mandatory OpenAI Client call via Proxy."""
+    if not API_KEY or not API_BASE_URL:
         return None
 
+    # Initialize client exactly as requested in 'How to fix'
     client = OpenAI(
         base_url=API_BASE_URL,
         api_key=API_KEY,
@@ -55,7 +54,8 @@ def _llm_select_action(obs: Observation) -> Optional[Action]:
             target_column=data.get("target_column"),
             parameters=data.get("parameters", {}),
         )
-    except Exception:
+    except Exception as e:
+        print(f"# LLM Call Failed: {e}", file=sys.stderr)
         return None
 
 def run_episode(task_id: str):
@@ -72,10 +72,10 @@ def run_episode(task_id: str):
         while not obs.done and step_n < 10:
             step_n += 1
             
-            # MANDATORY: Try LLM first
+            # FORCE LLM CALL
             action = _llm_select_action(obs)
             
-            # FALLBACK
+            # ONLY use heuristic if LLM is absolutely unavailable
             if action is None:
                 action = heuristic.select_action(obs)
 
@@ -102,6 +102,10 @@ def run_episode(task_id: str):
         print(f"Error: {e}", file=sys.stderr)
 
 def main():
+    # Final check: if the proxy variables are missing, warn the log
+    if not API_KEY:
+        print("# WARNING: API_KEY is missing in environment!", file=sys.stderr)
+    
     for task_id in sorted(TASK_REGISTRY.keys()):
         run_episode(task_id)
 
