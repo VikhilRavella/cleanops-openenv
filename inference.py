@@ -4,68 +4,54 @@ import os
 import sys
 import traceback
 from typing import Any, Dict, List, Optional
+from openai import OpenAI  # Mandatory requirement
 
-# ── Environment imports ──────────────────────────────────────────────────────
-# Fixes the NameError and ensures root imports work
+# ── Environment Setup ───────────────────────────────────────────────────────
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from models import Action, ActionType, Observation
+from models import Action, Observation
 from tasks import TASK_REGISTRY
-from agent import get_agent
-from graders import grade
 from environment import CleanOpsEnvironment
+from graders import grade
+from agent import get_agent
 
-# ── Config (MANDATORY: Scaler injects these specific variables) ──────────────
-API_BASE_URL: str = os.getenv("API_BASE_URL", "https://api-inference.huggingface.co/v1")
-MODEL_NAME: str   = os.getenv("MODEL_NAME", "Qwen/Qwen2.5-72B-Instruct")
-# KEY FIX: Using API_KEY ensures the Scaler Proxy tracks your agent
-API_KEY: str      = os.getenv("API_KEY", os.getenv("HF_TOKEN", "")) 
-ENV_NAME: str     = "cleanops"
+# ── Config (Strictly following Mandatory Instructions) ──────────────────────
+API_BASE_URL = os.getenv("API_BASE_URL", "https://api-inference.huggingface.co/v1")
+MODEL_NAME = os.getenv("MODEL_NAME", "Qwen/Qwen2.5-72B-Instruct")
+# The instructions mention HF_TOKEN, but the proxy check looks for API_KEY too. 
+# We look for both to be 100% safe.
+HF_TOKEN = os.getenv("HF_TOKEN", os.getenv("API_KEY", ""))
 
-_openai_client = None
-
-def _get_openai_client():
-    global _openai_client
-    if _openai_client is None and API_KEY:
-        try:
-            from openai import OpenAI
-            _openai_client = OpenAI(
-                base_url=API_BASE_URL,
-                api_key=API_KEY,
-            )
-        except Exception:
-            _openai_client = None
-    return _openai_client
-
-# ── LLM-based action selection ────────────────────────────────────────────────
-_SYSTEM_PROMPT = """You are a data cleaning agent. Output ONLY valid JSON."""
+# ── OpenAI Client Initialization ───────────────────────────────────────────
+client = OpenAI(
+    base_url=API_BASE_URL,
+    api_key=HF_TOKEN,
+)
 
 def _llm_select_action(obs: Observation) -> Optional[Action]:
-    """Ask the LLM for the next action via the Scaler Proxy."""
-    client = _get_openai_client()
-    if client is None:
+    """Uses the mandatory OpenAI Client for LLM calls."""
+    if not HF_TOKEN:
         return None
-
-    user_msg = f"Task: {obs.task_id} | Step: {obs.step_count}/{obs.max_steps} | Message: {obs.message}"
-
+    
+    system_prompt = "You are a data cleaning agent. Output ONLY valid JSON."
+    user_msg = f"Task: {obs.task_id} | Step: {obs.step_count} | Message: {obs.message}"
+    
     try:
         response = client.chat.completions.create(
             model=MODEL_NAME,
-            max_tokens=200,
-            temperature=0.0,
             messages=[
-                {"role": "system", "content": _SYSTEM_PROMPT},
-                {"role": "user",   "content": user_msg},
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_msg},
             ],
+            temperature=0.0,
+            max_tokens=200
         )
         raw = response.choices[0].message.content.strip()
-        # Clean up potential markdown formatting
+        # Clean markdown if present
         if "```" in raw:
-            raw = raw.split("```")[1]
-            if raw.startswith("json"):
-                raw = raw[4:]
+            raw = raw.split("```")[1].replace("json", "").strip()
         
-        data = json.loads(raw.strip())
+        data = json.loads(raw)
         return Action(
             action_type=data["action_type"],
             target_column=data.get("target_column"),
@@ -74,52 +60,55 @@ def _llm_select_action(obs: Observation) -> Optional[Action]:
     except Exception:
         return None
 
-# ── Episode runner ────────────────────────────────────────────────────────────
 def run_episode(task_id: str):
-    task = TASK_REGISTRY[task_id]
     env = CleanOpsEnvironment()
     heuristic = get_agent(task_id, prefer_llm=False)
     
-    print(f"[START] task={task_id} env={ENV_NAME} model={MODEL_NAME}", flush=True)
+    # ── MANDATORY LOGGING FORMAT: [START] ──
+    print(f"[START] task={task_id} env=cleanops model={MODEL_NAME}", flush=True)
     
     try:
         obs = env.reset(task_id)
         step_n = 0
         rewards = []
 
-        while not obs.done and step_n < task.max_steps:
+        while not obs.done and step_n < 10:  # Adjust max_steps as needed
             step_n += 1
             
-            # MANDATORY: Attempt LLM first so the Proxy records the activity
+            # 1. Attempt LLM call (Mandatory for Proxy)
             action = _llm_select_action(obs)
             
-            # Fallback if LLM fails
+            # 2. Fallback to heuristic if LLM fails
             if action is None:
                 action = heuristic.select_action(obs)
 
             obs, reward, done, info = env.step(action)
-            rewards.append(round(reward, 2))
+            rewards.append(reward)
 
+            # ── MANDATORY LOGGING FORMAT: [STEP] ──
+            # order: step, action, reward, done, error
             print(
                 f"[STEP] step={step_n} action={action.action_type} "
                 f"reward={reward:.2f} done={'true' if done else 'false'} error=null",
-                flush=True,
+                flush=True
             )
 
+        # Grader
         grade_res = grade(task_id, env.current_df, env.expected_df)
         success = grade_res.score >= 0.5
-        rewards_str = ",".join(map(str, rewards))
-        
+        rewards_str = ",".join([f"{r:.2f}" for r in rewards])
+
+        # ── MANDATORY LOGGING FORMAT: [END] ──
+        # order: success, steps, score, rewards
         print(
             f"[END] success={'true' if success else 'false'} "
             f"steps={step_n} score={grade_res.score:.2f} rewards={rewards_str}",
-            flush=True,
+            flush=True
         )
         
     except Exception as e:
-        print(f"Episode Error: {e}", file=sys.stderr)
+        print(f"Error: {e}", file=sys.stderr)
 
-# ── Main ──────────────────────────────────────────────────────────────────────
 def main():
     for task_id in sorted(TASK_REGISTRY.keys()):
         run_episode(task_id)
