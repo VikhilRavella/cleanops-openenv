@@ -40,7 +40,7 @@ from models import Action, ActionType, Observation
 from tasks import TASK_REGISTRY
 from agent import get_agent
 from graders import grade
-from server.environment import CleanOpsEnvironment
+from environment import CleanOpsEnvironment
 
 # ── Config (from env vars) ───────────────────────────────────────────────────
 API_BASE_URL: str = os.getenv("API_BASE_URL", "https://api-inference.huggingface.co/v1")
