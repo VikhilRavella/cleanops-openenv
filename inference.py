@@ -2,8 +2,9 @@ from __future__ import annotations
 import json
 import os
 import sys
-import traceback
+import time
 from typing import List, Optional
+from openai import OpenAI
 
 # ── Environment Setup ───────────────────────────────────────────────────────
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -13,7 +14,7 @@ from tasks import TASK_REGISTRY
 from environment import CleanOpsEnvironment
 from graders import grade
 
-# Import get_agent safely
+# Safe import for the agent
 try:
     from agent import get_agent
 except ImportError:
@@ -21,40 +22,27 @@ except ImportError:
         import agent
         return agent.get_agent(*args, **kwargs)
 
-# ── Config ──────────────────────────────────────────────────────────────────
+# ── Config (STRICT COMPLIANCE WITH VALIDATOR) ───────────────────────────────
+# The validator specifically asks for os.environ["API_BASE_URL"] and os.environ["API_KEY"]
 API_BASE_URL = os.environ.get("API_BASE_URL", "https://router.huggingface.co/v1")
-API_KEY = os.environ.get("API_KEY") or os.environ.get("HF_TOKEN")
+API_KEY = os.environ.get("API_KEY", os.environ.get("HF_TOKEN", ""))
 MODEL_NAME = os.environ.get("MODEL_NAME", "Qwen/Qwen2.5-72B-Instruct")
 
-# ── Global Client (Delayed Initialization) ──────────────────────────────────
-_client = None
-
-def _get_client():
-    """Initializes the OpenAI client only when needed to prevent startup crashes."""
-    global _client
-    if _client is None:
-        try:
-            from openai import OpenAI
-            # We use a dummy key if API_KEY is missing to prevent the library from crashing
-            _client = OpenAI(
-                base_url=API_BASE_URL,
-                api_key=API_KEY if API_KEY else "no_key_found"
-            )
-        except Exception as e:
-            print(f"# Client initialization failed: {e}", file=sys.stderr)
-            return None
-    return _client
-
 def _llm_select_action(obs: Observation) -> Optional[Action]:
-    """Call LLM via proxy to choose an action."""
-    client = _get_client()
-    if not client or not API_KEY:
+    """Mandatory OpenAI Client call via the Scaler Proxy."""
+    if not API_KEY:
         return None
 
-    system_prompt = "You are a data cleaning agent. Output ONLY valid JSON."
-    user_msg = f"Task: {obs.task_id} | Message: {obs.message}"
-
     try:
+        # Initialize client inside the call to ensure environment variables are fresh
+        client = OpenAI(
+            base_url=API_BASE_URL,
+            api_key=API_KEY
+        )
+        
+        system_prompt = "You are a data cleaning agent. Output ONLY valid JSON."
+        user_msg = f"Task: {obs.task_id} | Message: {obs.message}"
+
         response = client.chat.completions.create(
             model=MODEL_NAME,
             messages=[
@@ -75,7 +63,7 @@ def _llm_select_action(obs: Observation) -> Optional[Action]:
             parameters=data.get("parameters", {}),
         )
     except Exception as e:
-        print(f"# LLM call failed: {e}", file=sys.stderr)
+        print(f"# Proxy Call Attempted but failed: {e}", file=sys.stderr)
         return None
 
 def run_episode(task_id: str):
@@ -91,7 +79,11 @@ def run_episode(task_id: str):
 
         while not obs.done and step_n < 10:
             step_n += 1
+            
+            # MANDATORY: Try the LLM first
             action = _llm_select_action(obs)
+            
+            # FALLBACK
             if action is None:
                 action = heuristic.select_action(obs)
 
@@ -115,11 +107,12 @@ def run_episode(task_id: str):
         )
 
     except Exception as e:
-        # Ensure we always print an [END] tag even if the loop crashes
         print(f"[END] success=false steps=0 score=0.00 rewards=", flush=True)
-        print(f"# Error during episode: {e}", file=sys.stderr)
+        print(f"# Error: {e}", file=sys.stderr)
 
 def main():
+    # Small delay to ensure container network is fully up
+    time.sleep(2)
     for task_id in sorted(TASK_REGISTRY.keys()):
         run_episode(task_id)
 
