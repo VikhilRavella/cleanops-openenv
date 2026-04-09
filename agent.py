@@ -172,8 +172,9 @@ class LLMAgent:
 
 
 # ─── Factory ──────────────────────────────────────────────────────────────────
+# ─── Factory ──────────────────────────────────────────────────────────────────
 
-def get_agent(task_id: str, prefer_llm: bool = False) -> HeuristicAgent | LLMAgent:
+def get_agent(task_id: str, prefer_llm: bool = False):
     """
     Return the best available agent.
     - prefer_llm=True and OPENAI_API_KEY set → LLMAgent (with heuristic fallback)
