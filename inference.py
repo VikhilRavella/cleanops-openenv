@@ -16,13 +16,14 @@ from agent import get_agent
 
 # ── Config ───────────────────────────────────────────────────────────────────
 API_BASE_URL = os.environ.get("API_BASE_URL", "https://router.huggingface.co/v1")
-API_KEY      = os.environ.get("API_KEY") or os.environ.get("HF_TOKEN")
+API_KEY      = os.environ.get("API_KEY") or os.environ.get("HF_TOKEN") or "dummy-key"
 MODEL_NAME   = os.environ.get("MODEL_NAME", "Qwen/Qwen2.5-72B-Instruct")
 
-# ── Single global client so proxy can track the session ──────────────────────
+# ── Global client (created safely with fallback key) ─────────────────────────
 client = OpenAI(
     base_url=API_BASE_URL,
-    api_key=API_KEY,
+    api_key=API_KEY,        # never None now — "dummy-key" prevents crash at import
+    http_client=None,
 )
 
 def _llm_select_action(obs: Observation) -> Optional[Action]:
@@ -70,7 +71,7 @@ def run_episode(task_id: str):
 
     try:
         obs = env.reset(task_id)
-        heuristic.plan(obs)          # ← FIXED: must call plan() before the loop
+        heuristic.plan(obs)
 
         step_n  = 0
         rewards: List[float] = []
@@ -78,9 +79,9 @@ def run_episode(task_id: str):
         while not obs.done and step_n < 10:
             step_n += 1
 
-            action = _llm_select_action(obs)      # always try LLM first
+            action = _llm_select_action(obs)
             if action is None:
-                action = heuristic.select_action(obs)  # fallback only if LLM failed
+                action = heuristic.select_action(obs)
 
             obs, reward, done, info = env.step(action)
             rewards.append(reward)
@@ -107,7 +108,7 @@ def run_episode(task_id: str):
 
 
 def main():
-    if not API_KEY:
+    if not os.environ.get("API_KEY") and not os.environ.get("HF_TOKEN"):
         print("# WARNING: API_KEY / HF_TOKEN not set!", file=sys.stderr)
 
     for task_id in sorted(TASK_REGISTRY.keys()):
